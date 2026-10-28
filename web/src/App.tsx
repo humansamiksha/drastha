@@ -7,7 +7,7 @@ import { AnalystRoute } from "./AnalystRoute";
 import { apiErrorMessage } from "./apiError";
 import {
   Activity, ArrowRight, BarChart3, Check, ChevronRight, CircleAlert, Download, Eye,
-  FileJson, FileUp, Filter, Moon, Network, Radio, RefreshCw, Search, Sun, X,
+  FileJson, FileSearch, FileUp, Filter, Layers3, Moon, Network, Radio, RefreshCw, ScanSearch, Search, Sun, X,
 } from "lucide-react";
 
 type Theme = "dark" | "light";
@@ -43,6 +43,22 @@ type DemoStage = { name: string; status: string; detail: string; duration_ms?: n
 type DemoRun = { status: string; telemetry_status: string; elapsed_ms?: number; stages: DemoStage[]; run_id?: string };
 type Health = { status: string; mode: string; storage: string; return_path_required: boolean; demo_run?: DemoRun | null };
 type FeatureCoverage = { mode: string; counts: Record<string, number>; network_direction_status: string; exfiltration_direction: string };
+type PcapInputSchema = {
+  packet_capture?: {
+    extractor_version?: string;
+    capture_sha256?: string;
+    counters?: Record<string, number>;
+    payload_decrypted?: boolean;
+    application_payload_retained?: boolean;
+    join?: Record<string, number>;
+  };
+  source_upload?: {
+    format?: string;
+    zeek_logs?: string[];
+    temporary_processing?: boolean;
+    raw_capture_retained?: boolean;
+  };
+};
 
 function FeatureCoverageNote({ value }: { value?: FeatureCoverage }) {
   if (!value) return null;
@@ -59,6 +75,7 @@ export type UploadResult = {
     degraded_reasons: string[]; errors: string[];
   };
   feature_coverage?: FeatureCoverage;
+  input_schema?: PcapInputSchema;
   alerts: Alert[]; incidents: Incident[]; top_incident_id?: string; stages: DemoStage[]; scope_note: string;
   overall_risk?: OverallRiskData;
   telemetry?: { connection_records: number; dns_records: number; encrypted_session_records: number; supplied_labels_ignored: boolean };
@@ -69,6 +86,38 @@ export type UploadResult = {
   };
   evaluation?: { true_positive: number; false_positive: number; false_negative: number; true_negative: number; precision: number; recall: number; f1_score: number; false_positive_rate: number } | null;
 };
+
+function PcapAnalysisStory({ result }: { result: UploadResult }) {
+  const capture = result.input_schema?.packet_capture;
+  const source = result.input_schema?.source_upload;
+  if (source?.format !== "pcap" || !capture) return null;
+  const counters = capture.counters ?? {};
+  const packetCount = counters.packets_seen ?? 0;
+  const matchedPackets = counters.matched_packets ?? 0;
+  const connectionRecords = result.telemetry?.connection_records ?? 0;
+  const dnsRecords = result.telemetry?.dns_records ?? 0;
+  const tlsRecords = result.telemetry?.encrypted_session_records ?? 0;
+  const firstAlert = result.alerts[0];
+  const strongestEvidence = firstAlert?.evidence.slice(0, 3) ?? [];
+  return <section className="pcap-story" aria-labelledby="pcap-story-title">
+    <div className="pcap-story-head">
+      <div><p className="eyebrow">Inside this packet capture</p><h3 id="pcap-story-title">What Drastha read and how it reached the result</h3></div>
+      <span>{packetCount} packets inspected · payload never decrypted</span>
+    </div>
+    <ol className="pcap-story-flow">
+      <li><i><FileSearch size={18} /></i><div><span>1 · Raw capture</span><b>{packetCount} Ethernet packets</b><small>{matchedPackets} packets matched to observed network sessions. The original PCAP was processed temporarily and was not retained.</small></div></li>
+      <li><i><Layers3 size={18} /></i><div><span>2 · Zeek conversion</span><b>{connectionRecords} connections · {dnsRecords} DNS · {tlsRecords} TLS</b><small>Zeek created {source.zeek_logs?.join(", ") || "network metadata logs"}. Drastha analysed metadata instead of application payload content.</small></div></li>
+      <li><i><ScanSearch size={18} /></i><div><span>3 · Behaviour checks</span><b>{result.alerts.length ? `${result.alerts.length} threshold-crossing finding` : "No configured threshold crossed"}</b><small>{firstAlert ? `${firstAlert.detector_id} examined ${firstAlert.flow_ids?.length ?? 0} related flows inside its time window.` : "Connection, DNS and encrypted-session evidence was checked by the enabled detectors."}</small></div></li>
+      <li><i><CircleAlert size={18} /></i><div><span>4 · Analyst result</span><b>{result.incidents.length} incident · {result.overall_risk?.score ?? firstAlert?.severity ?? "no"} {result.overall_risk ? "risk" : "priority"}</b><small>{firstAlert ? `${firstAlert.threat_class || label(firstAlert.subtype)} from ${firstAlert.src_ip} to ${firstAlert.dst_ip || "multiple destinations"}.` : "The capture did not provide enough evidence for an alert."}</small></div></li>
+    </ol>
+    {firstAlert && <div className="pcap-decision">
+      <div><span>Why the detector raised this alert</span><b>{label(firstAlert.subtype)}</b><small>These measured values were compared with the configured detector boundary:</small></div>
+      <div className="pcap-decision-values">{strongestEvidence.map((item) => <article key={item.name}><span>{label(item.name)}</span><b>{item.observed}</b><em>{item.comparison}</em><small>{item.explanation}</small></article>)}</div>
+      <p><b>Important:</b> This is evidence of a matching traffic pattern, not proof of malicious intent. {firstAlert.limitations[0]}</p>
+    </div>}
+    <details className="pcap-technical"><summary>Technical capture details</summary><div><span>SHA-256</span><code>{capture.capture_sha256 || "not recorded"}</code><span>Extractor</span><code>{capture.extractor_version || "not recorded"}</code><span>Payload decrypted</span><code>{capture.payload_decrypted ? "yes" : "no"}</code><span>Application payload retained</span><code>{capture.application_payload_retained ? "yes" : "no"}</code></div></details>
+  </section>;
+}
 export type RunEvidence = {
   run_id: string; filename?: string; quality?: { status: string };
   analysed_at?: number | null; capture_start?: number | null; capture_end?: number | null;
@@ -492,6 +541,7 @@ function App() {
         <div className="result-heading"><div className="verdict-icon">{uploadResult.verdict === "threat_detected" ? <CircleAlert size={22} /> : <Check size={22} />}</div><div><p className="eyebrow">Uploaded replay result · {uploadResult.filename}</p><h2>{uploadResult.headline}</h2><p>{uploadResult.summary}</p></div><button className="secondary" onClick={() => openReplayEvidence(uploadResult)}><Eye size={15} />Review full evidence</button></div>
         {uploadResult.overall_risk && <OverallRisk value={uploadResult.overall_risk} label={label} />}
         <ReplayOutcomeStatus result={uploadResult} />
+        <PcapAnalysisStory result={uploadResult} />
         <button className="secondary visualise-replay" onClick={() => navigate("analyst")}><BarChart3 size={15} />Visualise attack patterns</button>
         <div className="result-facts"><span><b>{uploadResult.quality.records_accepted}/{uploadResult.quality.records_received}</b> accepted records</span><span><b>{uploadResult.quality.records_rejected}</b> rejected</span><span><b>{uploadResult.quality.out_of_order_records}</b> out of order</span><span><b>{uploadResult.quality.duplicate_uid_count}</b> duplicate UIDs</span><span><b>{uploadResult.alerts.length}</b> findings</span><span><b>{uploadResult.incidents.length}</b> incidents</span><span><b>{uploadResult.analysis_ms} ms</b> analysis time</span><span><b>{uploadResult.quality.status}</b> data quality</span>{uploadResult.telemetry && <><span><b>{uploadResult.telemetry.dns_records}</b> DNS records</span><span><b>{uploadResult.telemetry.encrypted_session_records}</b> TLS records</span></>}{uploadResult.context_policy && <span><b>{uploadResult.context_policy.suppressed_connection_evaluations}</b> policy-approved records</span>}</div>
         {uploadResult.quality.degraded_reasons.length > 0 && <p className="scope-note"><b>Data-quality reason:</b> {uploadResult.quality.degraded_reasons.join("; ")}</p>}

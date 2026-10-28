@@ -11,10 +11,7 @@ The repository contains a working offline SIH demonstration and a production
 hardening track. Controlled replay results are reproducible; real-traffic
 generalization, continuous-service scale and operational deployment remain open.
 
-## SIH26145 dataset and traffic-tool provenance
-
-The finite SIH-only delivery gates and stop condition are in
-[SIH closure plan](docs/SIH_CLOSURE_PLAN.md).
+## Dataset and traffic-tool provenance
 
 **Current follow-up (16 September 2026):** [Sprint 38 independent CTU DGA
 evaluation](docs/SPRINT_38.md) freezes 2,000 DGA and 2,000 benign names from the
